@@ -25,25 +25,27 @@ from matplotlib.figure import Figure
 # ==========================================
 # CUSTOM ASSETS & AUDIO CONFIGURATION
 # ==========================================
-CUSTOM_VOICE_AUDIO_PATH = "alert.ogg"  
-WARNING_VOICE_AUDIO_PATH = "warning.ogg"
+CUSTOM_VOICE_AUDIO_PATH = "custom_voice.mp3"  
 ILLUSTRATION_IMAGE_PATH = "blink_illustration.gif"
 
 
 # ==========================================
 # COLOR PALETTE COMBOS
 # ==========================================
+# Set ACTIVE_COMBO to 1 or 2:
+# Combo 1: Pink (#E83EA8) & Blue (#4351FC) -> Vibrant / High Energy
+# Combo 2: Periwinkle (#837EF2) & Lavender (#B468C3) -> Soft / Calm Focus
 ACTIVE_COMBO = 1
 
 COMBOS = {
     1: {
-        "primary": "#4351FC",     # Royal Blue
-        "accent": "#E83EA8",      # Vibrant Pink
+        "primary": "#4351FC",     # Royal Blue (Headers, Primary Buttons, Line Charts)
+        "accent": "#E83EA8",      # Vibrant Pink (Active Badges, Warnings, Secondary Highlights)
         "bg_light": "#F2F4FF",    # Light Tint
     },
     2: {
-        "primary": "#837EF2",     # Periwinkle
-        "accent": "#B468C3",      # Lavender
+        "primary": "#837EF2",     # Periwinkle (Headers, Primary Buttons, Line Charts)
+        "accent": "#B468C3",      # Lavender (Active Badges, Warnings, Secondary Highlights)
         "bg_light": "#F7F4FF",    # Light Tint
     }
 }
@@ -70,11 +72,19 @@ CONSEC_FRAMES = 3
 LEFT_EYE_INDICES = [362, 385, 387, 263, 373, 380]
 RIGHT_EYE_INDICES = [33, 160, 158, 133, 153, 144]
 
-LOW_BLINK_THRESHOLD = 10      # Blinks per minute threshold
-CONSEC_LOW_MINS_TRIGGER = 1   # Trigger alert on 3 consecutive low minutes
-INACTIVITY_WARN_SEC = 10     # 5 Minutes (no face)
-INACTIVITY_SHUTDOWN_SEC = 600 # 10 Minutes (no face)
+# LOW_BLINK_THRESHOLD = 10      # Blinks per minute threshold
+# CONSEC_LOW_MINS_TRIGGER = 3   # Trigger alert on 3 consecutive low minutes
+# INACTIVITY_WARN_SEC = 300     # 5 Minutes (no face)
+# INACTIVITY_SHUTDOWN_SEC = 600 # 10 Minutes (no face)
+# Adaptive blink monitoring
+INITIAL_BLINK_THRESHOLD = 10
+MAX_BLINK_THRESHOLD = 30
 
+BLINK_STAGE_DURATION = 60  # Each stage lasts 60 seconds
+MAX_BLINK_STAGES = 3        # 60 -> 120 -> 180 seconds
+
+INACTIVITY_WARN_SEC = 300
+INACTIVITY_SHUTDOWN_SEC = 600
 
 # ==========================================
 # ASYNCHRONOUS TTS WORKER
@@ -110,133 +120,627 @@ class TTSWorker(QThread):
 # ==========================================
 # EYE TRACKING WORKER
 # ==========================================
+# class EyeTrackingWorker(QThread):
+#     frame_processed = Signal(QImage)
+#     metrics_updated = Signal(float, int, int, int, int)
+#     alert_triggered = Signal(str, str)
+#     inactivity_warned = Signal(str)
+#     auto_shutdown_signal = Signal()
+
+#     def __init__(self, camera_index=0, parent=None):
+#         super().__init__(parent)
+#         self.camera_index = camera_index
+#         self.running = False
+#         self.show_camera = True
+#         self.total_blinks = 0
+#         self.minute_blink_history = []
+#         self.current_window_blinks = 0
+#         self.consecutive_low_minutes = 0
+
+#     def calculate_ear(self, eye_indices, landmarks):
+#         try:
+#             p1 = np.array([landmarks[eye_indices[0]].x, landmarks[eye_indices[0]].y])
+#             p2 = np.array([landmarks[eye_indices[1]].x, landmarks[eye_indices[1]].y])
+#             p3 = np.array([landmarks[eye_indices[2]].x, landmarks[eye_indices[2]].y])
+#             p4 = np.array([landmarks[eye_indices[3]].x, landmarks[eye_indices[3]].y])
+#             p5 = np.array([landmarks[eye_indices[4]].x, landmarks[eye_indices[4]].y])
+#             p6 = np.array([landmarks[eye_indices[5]].x, landmarks[eye_indices[5]].y])
+
+#             v1 = np.linalg.norm(p2 - p6)
+#             v2 = np.linalg.norm(p3 - p5)
+#             h = np.linalg.norm(p1 - p4)
+#             return (v1 + v2) / (2.0 * h)
+#         except Exception:
+#             return 0.0
+
+#     def run(self):
+#         cap = cv2.VideoCapture(self.camera_index)
+#         if not cap.isOpened():
+#             self.alert_triggered.emit("Camera Error", "Unable to open video capture device.")
+#             return
+
+#         mp_face_mesh = mp.solutions.face_mesh
+#         face_mesh = mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+
+#         self.running = True
+#         frame_counter = 0
+#         session_start_time = time.time()
+#         window_start_time = time.time()
+#         face_lost_start_time = None
+#         warned_5min_inactivity = False
+
+#         while self.running:
+#             success, frame = cap.read()
+#             if not success:
+#                 break
+
+#             frame = cv2.flip(frame, 1)
+#             h, w, _ = frame.shape
+#             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+#             results = face_mesh.process(rgb_frame)
+
+#             current_ear = 0.0
+#             face_detected = results.multi_face_landmarks is not None
+
+#             now = time.time()
+#             if not face_detected:
+#                 if face_lost_start_time is None:
+#                     face_lost_start_time = now
+#                 else:
+#                     absent_duration = now - face_lost_start_time
+#                     if absent_duration >= INACTIVITY_WARN_SEC and not warned_5min_inactivity:
+#                         self.inactivity_warned.emit("မျက်နှာလေးကို ၅ မိနစ်လောက် မတွေ့ရသေးဘူးနော်။ ကင်မရာရှေ့မှာ ရှိနေသေးလား စစ်ကြည့်ပေးပါ။ မသုံးတော့ဘူးဆိုရင် ခဏပိတ်ထားလို့ရတယ်နော်။ 😊")
+#                         warned_5min_inactivity = True
+#                     if absent_duration >= INACTIVITY_SHUTDOWN_SEC:
+#                         self.auto_shutdown_signal.emit()
+#                         break
+#             else:
+#                 face_lost_start_time = None
+#                 warned_5min_inactivity = False
+
+#                 landmarks = results.multi_face_landmarks[0].landmark
+#                 left_ear = self.calculate_ear(LEFT_EYE_INDICES, landmarks)
+#                 right_ear = self.calculate_ear(RIGHT_EYE_INDICES, landmarks)
+#                 current_ear = (left_ear + right_ear) / 2.0
+
+#                 if current_ear < EAR_THRESHOLD:
+#                     frame_counter += 1
+#                 else:
+#                     if frame_counter >= CONSEC_FRAMES:
+#                         self.total_blinks += 1
+#                         self.current_window_blinks += 1
+#                     frame_counter = 0
+
+#             elapsed_window = now - window_start_time
+#             if elapsed_window >= 60.0:
+#                 self.minute_blink_history.append(self.current_window_blinks)
+
+#                 if self.current_window_blinks < LOW_BLINK_THRESHOLD:
+#                     self.consecutive_low_minutes += 1
+#                     if self.consecutive_low_minutes >= CONSEC_LOW_MINS_TRIGGER:
+#                         self.alert_triggered.emit(  "👀 မျက်တောင်လေး ခတ်ဖို့ မမေ့နဲ့နော်!",
+#                                                     "မျက်တောင်ခတ်ဖို့ အချိန်ရောက်ပြီနော်! ခဏလေး အနားယူလိုက်ရအောင်။ 😊")
+#                 else:
+#                     self.consecutive_low_minutes = 0
+
+#                 self.current_window_blinks = 0
+#                 window_start_time = now
+
+#             session_duration = int(now - session_start_time)
+#             self.metrics_updated.emit(current_ear, self.total_blinks, self.current_window_blinks, self.consecutive_low_minutes, session_duration)
+
+#             if self.show_camera:
+#                 if face_detected:
+#                     cv2.putText(frame, f"EAR: {current_ear:.2f}", (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+#                 else:
+#                     cv2.putText(frame, "NO FACE DETECTED", (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+#                 bytes_per_line = 3 * w
+#                 qt_img = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+#                 self.frame_processed.emit(qt_img)
+
+#             self.msleep(30)
+
+#         cap.release()
+
+#     def stop(self):
+#         self.running = False
+#         self.wait()
 class EyeTrackingWorker(QThread):
     frame_processed = Signal(QImage)
+
+    # ear, total_blinks, current_minute_blinks, stage, duration
     metrics_updated = Signal(float, int, int, int, int)
+
     alert_triggered = Signal(str, str)
     inactivity_warned = Signal(str)
     auto_shutdown_signal = Signal()
 
     def __init__(self, camera_index=0, parent=None):
         super().__init__(parent)
+
         self.camera_index = camera_index
         self.running = False
         self.show_camera = True
+
+        # ==========================================
+        # SESSION STATISTICS
+        # ==========================================
+
+        # Total blinks since the session started
         self.total_blinks = 0
+
+        # Number of blinks in each completed 60-second
+        # statistics window.
+        #
+        # Example:
+        # [8, 12, 15, 10, 14]
         self.minute_blink_history = []
-        self.current_window_blinks = 0
-        self.consecutive_low_minutes = 0
+
+        # Blinks accumulated during the CURRENT
+        # 60-second statistics window.
+        self.current_minute_blinks = 0
+
+        # ==========================================
+        # ADAPTIVE BLINK MONITORING
+        # ==========================================
+
+        # Cumulative blinks during the current
+        # adaptive monitoring cycle.
+        #
+        # This does NOT reset every minute.
+        self.cycle_blinks = 0
+
+        # Stage 1 = 10 blinks / 60 sec
+        # Stage 2 = 20 blinks / 120 sec
+        # Stage 3 = 30 blinks / 180 sec
+        self.blink_stage = 1
+
+        self.blink_threshold = INITIAL_BLINK_THRESHOLD
+
+        # Time when the current adaptive cycle started
+        self.cycle_start_time = None
+
+        # Time when the current statistics minute started
+        self.minute_start_time = None
+
+    # ==========================================
+    # RESET ADAPTIVE CYCLE
+    # ==========================================
+
+    def reset_blink_cycle(self):
+        """
+        Reset ONLY the adaptive monitoring cycle.
+
+        IMPORTANT:
+        minute_blink_history is NOT reset.
+        total_blinks is NOT reset.
+        """
+
+        self.cycle_blinks = 0
+        self.blink_stage = 1
+        self.blink_threshold = INITIAL_BLINK_THRESHOLD
+        self.cycle_start_time = time.time()
+
+    # ==========================================
+    # CALCULATE EAR
+    # ==========================================
 
     def calculate_ear(self, eye_indices, landmarks):
         try:
-            p1 = np.array([landmarks[eye_indices[0]].x, landmarks[eye_indices[0]].y])
-            p2 = np.array([landmarks[eye_indices[1]].x, landmarks[eye_indices[1]].y])
-            p3 = np.array([landmarks[eye_indices[2]].x, landmarks[eye_indices[2]].y])
-            p4 = np.array([landmarks[eye_indices[3]].x, landmarks[eye_indices[3]].y])
-            p5 = np.array([landmarks[eye_indices[4]].x, landmarks[eye_indices[4]].y])
-            p6 = np.array([landmarks[eye_indices[5]].x, landmarks[eye_indices[5]].y])
+            p1 = np.array([
+                landmarks[eye_indices[0]].x,
+                landmarks[eye_indices[0]].y
+            ])
+
+            p2 = np.array([
+                landmarks[eye_indices[1]].x,
+                landmarks[eye_indices[1]].y
+            ])
+
+            p3 = np.array([
+                landmarks[eye_indices[2]].x,
+                landmarks[eye_indices[2]].y
+            ])
+
+            p4 = np.array([
+                landmarks[eye_indices[3]].x,
+                landmarks[eye_indices[3]].y
+            ])
+
+            p5 = np.array([
+                landmarks[eye_indices[4]].x,
+                landmarks[eye_indices[4]].y
+            ])
+
+            p6 = np.array([
+                landmarks[eye_indices[5]].x,
+                landmarks[eye_indices[5]].y
+            ])
 
             v1 = np.linalg.norm(p2 - p6)
             v2 = np.linalg.norm(p3 - p5)
             h = np.linalg.norm(p1 - p4)
+
+            # Prevent division by zero
+            if h == 0:
+                return 0.0
+
             return (v1 + v2) / (2.0 * h)
+
         except Exception:
             return 0.0
 
+    # ==========================================
+    # MAIN WORKER
+    # ==========================================
+
     def run(self):
+
         cap = cv2.VideoCapture(self.camera_index)
+
         if not cap.isOpened():
-            self.alert_triggered.emit("Camera Error", "Unable to open video capture device.")
+            self.alert_triggered.emit(
+                "Camera Error",
+                "Unable to open video capture device."
+            )
             return
 
         mp_face_mesh = mp.solutions.face_mesh
-        face_mesh = mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+
+        face_mesh = mp_face_mesh.FaceMesh(
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
 
         self.running = True
+
+        # Blink detection
         frame_counter = 0
+
+        # Session timer
         session_start_time = time.time()
-        window_start_time = time.time()
+
+        # ==========================================
+        # START BOTH TIMERS
+        # ==========================================
+
+        # Adaptive cycle timer
+        self.reset_blink_cycle()
+
+        # Statistics minute timer
+        self.minute_start_time = time.time()
+
+        # Face inactivity timer
         face_lost_start_time = None
         warned_5min_inactivity = False
 
+        # ==========================================
+        # MAIN LOOP
+        # ==========================================
+
         while self.running:
+
             success, frame = cap.read()
+
             if not success:
                 break
 
+            # Mirror camera
             frame = cv2.flip(frame, 1)
+
             h, w, _ = frame.shape
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            # Convert BGR -> RGB
+            rgb_frame = cv2.cvtColor(
+                frame,
+                cv2.COLOR_BGR2RGB
+            )
+
+            # MediaPipe face detection
             results = face_mesh.process(rgb_frame)
 
             current_ear = 0.0
-            face_detected = results.multi_face_landmarks is not None
+
+            face_detected = (
+                results.multi_face_landmarks is not None
+            )
 
             now = time.time()
+
+            # ==========================================
+            # FACE NOT DETECTED
+            # ==========================================
+
             if not face_detected:
+
                 if face_lost_start_time is None:
                     face_lost_start_time = now
+
                 else:
-                    absent_duration = now - face_lost_start_time
-                    if absent_duration >= INACTIVITY_WARN_SEC and not warned_5min_inactivity:
-                        self.inactivity_warned.emit("မျက်နှာလေးကို ၅ မိနစ်လောက် မတွေ့ရသေးဘူးနော်။ ကင်မရာရှေ့မှာ ရှိနေသေးလား စစ်ကြည့်ပေးပါ။ မသုံးတော့ဘူးဆိုရင် ခဏပိတ်ထားလို့ရတယ်နော်။ 😊")
+
+                    absent_duration = (
+                        now - face_lost_start_time
+                    )
+
+                    # 5-minute inactivity warning
+                    if (
+                        absent_duration >= INACTIVITY_WARN_SEC
+                        and not warned_5min_inactivity
+                    ):
+
+                        self.inactivity_warned.emit(
+                            "မျက်နှာလေးကို ၅ မိနစ်လောက် "
+                            "မတွေ့ရသေးဘူးနော်။ "
+                            "ကင်မရာရှေ့မှာ ရှိနေသေးလား "
+                            "စစ်ကြည့်ပေးပါ။ "
+                            "မသုံးတော့ဘူးဆိုရင် ခဏပိတ်ထားလို့ရတယ်နော်။ 😊"
+                        )
+
                         warned_5min_inactivity = True
+
+                    # 10-minute automatic shutdown
                     if absent_duration >= INACTIVITY_SHUTDOWN_SEC:
+
                         self.auto_shutdown_signal.emit()
                         break
+
+            # ==========================================
+            # FACE DETECTED
+            # ==========================================
+
             else:
+
                 face_lost_start_time = None
                 warned_5min_inactivity = False
 
-                landmarks = results.multi_face_landmarks[0].landmark
-                left_ear = self.calculate_ear(LEFT_EYE_INDICES, landmarks)
-                right_ear = self.calculate_ear(RIGHT_EYE_INDICES, landmarks)
-                current_ear = (left_ear + right_ear) / 2.0
+                landmarks = (
+                    results.multi_face_landmarks[0].landmark
+                )
+
+                left_ear = self.calculate_ear(
+                    LEFT_EYE_INDICES,
+                    landmarks
+                )
+
+                right_ear = self.calculate_ear(
+                    RIGHT_EYE_INDICES,
+                    landmarks
+                )
+
+                current_ear = (
+                    left_ear + right_ear
+                ) / 2.0
+
+                # ==========================================
+                # BLINK DETECTION
+                # ==========================================
 
                 if current_ear < EAR_THRESHOLD:
+
                     frame_counter += 1
+
                 else:
+
                     if frame_counter >= CONSEC_FRAMES:
+
+                        # ----------------------------------
+                        # ONE BLINK DETECTED
+                        # ----------------------------------
+
                         self.total_blinks += 1
-                        self.current_window_blinks += 1
+
+                        # For minute statistics
+                        self.current_minute_blinks += 1
+
+                        # For adaptive 10 -> 20 -> 30 logic
+                        self.cycle_blinks += 1
+
                     frame_counter = 0
 
-            elapsed_window = now - window_start_time
-            if elapsed_window >= 60.0:
-                self.minute_blink_history.append(self.current_window_blinks)
+            # ==========================================
+            # MINUTE STATISTICS
+            # ==========================================
 
-                if self.current_window_blinks < LOW_BLINK_THRESHOLD:
-                    self.consecutive_low_minutes += 1
-                    if self.consecutive_low_minutes >= CONSEC_LOW_MINS_TRIGGER:
-                        self.alert_triggered.emit(  "👀 မျက်တောင်လေး ခတ်ဖို့ မမေ့နဲ့နော်!",
-                                                    "မျက်တောင်ခတ်ဖို့ အချိန်ရောက်ပြီနော်! ခဏလေး အနားယူလိုက်ရအောင်။ 😊")
+            elapsed_minute = (
+                now - self.minute_start_time
+            )
+
+            if elapsed_minute >= 60.0:
+
+                # Save completed minute
+                self.minute_blink_history.append(
+                    self.current_minute_blinks
+                )
+
+                # Start a new statistics minute
+                self.current_minute_blinks = 0
+                self.minute_start_time = now
+
+            # ==========================================
+            # ADAPTIVE BLINK MONITORING
+            # ==========================================
+
+            elapsed_cycle = (
+                now - self.cycle_start_time
+            )
+
+            # ------------------------------------------
+            # STAGE 1
+            #
+            # 0 - 60 seconds
+            # Need >= 10 blinks
+            # ------------------------------------------
+
+            if (
+                self.blink_stage == 1
+                and elapsed_cycle >= 60.0
+            ):
+
+                if self.cycle_blinks >= 10:
+
+                    # PASS
+                    # Restart everything for adaptive cycle
+                    self.reset_blink_cycle()
+
                 else:
-                    self.consecutive_low_minutes = 0
 
-                self.current_window_blinks = 0
-                window_start_time = now
+                    # FAIL
+                    # Move to stage 2
+                    self.blink_stage = 2
+                    self.blink_threshold = 20
 
-            session_duration = int(now - session_start_time)
-            self.metrics_updated.emit(current_ear, self.total_blinks, self.current_window_blinks, self.consecutive_low_minutes, session_duration)
+            # ------------------------------------------
+            # STAGE 2
+            #
+            # 60 - 120 seconds
+            # Need >= 20 cumulative blinks
+            # ------------------------------------------
+
+            elif (
+                self.blink_stage == 2
+                and elapsed_cycle >= 120.0
+            ):
+
+                if self.cycle_blinks >= 20:
+
+                    # PASS
+                    self.reset_blink_cycle()
+
+                else:
+
+                    # FAIL
+                    # Move to stage 3
+                    self.blink_stage = 3
+                    self.blink_threshold = 30
+
+            # ------------------------------------------
+            # STAGE 3
+            #
+            # 120 - 180 seconds
+            # Need >= 30 cumulative blinks
+            # ------------------------------------------
+
+            elif (
+                self.blink_stage == 3
+                and elapsed_cycle >= 180.0
+            ):
+
+                if self.cycle_blinks >= 30:
+
+                    # PASS
+                    self.reset_blink_cycle()
+
+                else:
+
+                    # FAIL ALL THREE STAGES
+                    self.alert_triggered.emit(
+                        "👀 မျက်တောင်လေး ခတ်ဖို့ မမေ့နဲ့နော်!",
+                        "မျက်တောင်ခတ်ဖို့ အချိန်ရောက်ပြီနော်! "
+                        "ခဏလေး အနားယူလိုက်ရအောင်။ 😊"
+                    )
+
+                    # Start a completely new cycle
+                    self.reset_blink_cycle()
+
+            # ==========================================
+            # SESSION METRICS
+            # ==========================================
+
+            session_duration = int(
+                now - session_start_time
+            )
+
+            self.metrics_updated.emit(
+                current_ear,
+                self.total_blinks,
+                self.current_minute_blinks,
+                self.blink_stage,
+                session_duration
+            )
+
+            # ==========================================
+            # CAMERA DISPLAY
+            # ==========================================
 
             if self.show_camera:
+
                 if face_detected:
-                    cv2.putText(frame, f"EAR: {current_ear:.2f}", (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+
+                    cv2.putText(
+                        frame,
+                        f"EAR: {current_ear:.2f}",
+                        (30, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (0, 255, 0),
+                        2
+                    )
+
+                    # Show adaptive status
+                    cv2.putText(
+                        frame,
+                        f"Cycle: {self.cycle_blinks}/{self.blink_threshold}",
+                        (30, 75),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (255, 0, 0),
+                        2
+                    )
+
+                    cv2.putText(
+                        frame,
+                        f"Stage: {self.blink_stage}/3",
+                        (30, 105),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (255, 0, 0),
+                        2
+                    )
+
                 else:
-                    cv2.putText(frame, "NO FACE DETECTED", (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+                    cv2.putText(
+                        frame,
+                        "NO FACE DETECTED",
+                        (30, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (0, 0, 255),
+                        2
+                    )
 
                 bytes_per_line = 3 * w
-                qt_img = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+
+                qt_img = QImage(
+                    rgb_frame.data,
+                    w,
+                    h,
+                    bytes_per_line,
+                    QImage.Format_RGB888
+                )
+
                 self.frame_processed.emit(qt_img)
 
+            # ~33 FPS
             self.msleep(30)
 
+        # ==========================================
+        # CLEANUP
+        # ==========================================
+
         cap.release()
+        face_mesh.close()
+
+    # ==========================================
+    # STOP
+    # ==========================================
 
     def stop(self):
         self.running = False
         self.wait()
-
 
 # ==========================================
 # CUSTOM STYLED UI COMPONENTS
@@ -274,7 +778,9 @@ class IllustrationAlertDialog(QDialog):
         title_label.setStyleSheet(f"color: {COLOR_ACCENT}; font-size: 20px; font-weight: 900; font-family: {FONT_HEADING};")
         layout.addWidget(title_label)
 
+        # NEW CODE
         ill_frame = QFrame()
+        # Changed background-color to transparent to remove the blue box
         ill_frame.setStyleSheet(f"background-color: transparent; border: 3px solid {NAVY_OUTLINE}; border-radius: 12px;")
         ill_layout = QVBoxLayout(ill_frame)
         ill_layout.setContentsMargins(15, 15, 15, 15)
@@ -283,15 +789,18 @@ class IllustrationAlertDialog(QDialog):
             ill_label = QLabel()
             ill_label.setAlignment(Qt.AlignCenter)
             
+            # Use QMovie to animate the .gif
             movie = QMovie(image_path)
             movie.setScaledSize(QSize(220, 160)) 
             ill_label.setMovie(movie)
-            movie.start()
+            movie.start() # Start the animation
             
+            # Keep a reference to prevent garbage collection
             self.movie = movie 
         else:
             ill_label = QLabel("👁️ ✨ 😌 ✨ 👁️\n\nTake a Blink Break!")
             ill_label.setAlignment(Qt.AlignCenter)
+            # Make sure text is visible if the background is now transparent/white
             ill_label.setStyleSheet(f"color: {NAVY_OUTLINE}; font-size: 20px; font-weight: bold; font-family: {FONT_HEADING};")
 
         ill_layout.addWidget(ill_label)
@@ -363,22 +872,91 @@ class AnalyticsCanvas(FigureCanvas):
         self.ax.set_facecolor(WHITE)
         super().__init__(fig)
 
+    # def plot_analytics(self, history):
+    #     self.ax.clear()
+        
+    #     if not history:
+    #         self.ax.text(0.5, 0.5, 'No Minute Data Logged Yet', color=NAVY_OUTLINE,
+    #                      horizontalalignment='center', verticalalignment='center',
+    #                      transform=self.ax.transAxes, weight='bold')
+    #     else:
+    #         minutes = list(range(1, len(history) + 1))
+    #         self.ax.plot(minutes, history, color=COLOR_PRIMARY, marker='o', linewidth=3, markersize=8, label='Blinks/Min')
+    #         self.ax.axhline(y=LOW_BLINK_THRESHOLD, color=COLOR_ACCENT, linestyle='--', linewidth=2, label='Low Threshold (10)')
+    #         self.ax.set_xlabel('Minute Window', color=NAVY_OUTLINE, fontsize=10, weight='bold')
+    #         self.ax.set_ylabel('Blink Count', color=NAVY_OUTLINE, fontsize=10, weight='bold')
+    #         self.ax.legend(facecolor=WHITE, edgecolor=NAVY_OUTLINE, labelcolor=NAVY_OUTLINE)
+
+    #     self.ax.tick_params(colors=NAVY_OUTLINE)
+    #     for spine in self.ax.spines.values():
+    #         spine.set_color(NAVY_OUTLINE)
+    #         spine.set_linewidth(2)
+
+    #     self.draw()
     def plot_analytics(self, history):
         self.ax.clear()
-        
-        if not history:
-            self.ax.text(0.5, 0.5, 'No Minute Data Logged Yet', color=NAVY_OUTLINE,
-                         horizontalalignment='center', verticalalignment='center',
-                         transform=self.ax.transAxes, weight='bold')
-        else:
-            minutes = list(range(1, len(history) + 1))
-            self.ax.plot(minutes, history, color=COLOR_PRIMARY, marker='o', linewidth=3, markersize=8, label='Blinks/Min')
-            self.ax.axhline(y=LOW_BLINK_THRESHOLD, color=COLOR_ACCENT, linestyle='--', linewidth=2, label='Low Threshold (10)')
-            self.ax.set_xlabel('Minute Window', color=NAVY_OUTLINE, fontsize=10, weight='bold')
-            self.ax.set_ylabel('Blink Count', color=NAVY_OUTLINE, fontsize=10, weight='bold')
-            self.ax.legend(facecolor=WHITE, edgecolor=NAVY_OUTLINE, labelcolor=NAVY_OUTLINE)
 
-        self.ax.tick_params(colors=NAVY_OUTLINE)
+        if not history:
+
+            self.ax.text(
+                0.5,
+                0.5,
+                'No Minute Data Logged Yet',
+                color=NAVY_OUTLINE,
+                horizontalalignment='center',
+                verticalalignment='center',
+                transform=self.ax.transAxes,
+                weight='bold'
+            )
+
+        else:
+
+            minutes = list(range(1, len(history) + 1))
+
+            self.ax.plot(
+                minutes,
+                history,
+                color=COLOR_PRIMARY,
+                marker='o',
+                linewidth=3,
+                markersize=8,
+                label='Blinks / Minute'
+            )
+
+            # This is only a reference line for the
+            # base 10-blinks-per-minute target.
+            self.ax.axhline(
+                y=10,
+                color=COLOR_ACCENT,
+                linestyle='--',
+                linewidth=2,
+                label='Base Target (10/min)'
+            )
+
+            self.ax.set_xlabel(
+                'Minute',
+                color=NAVY_OUTLINE,
+                fontsize=10,
+                weight='bold'
+            )
+
+            self.ax.set_ylabel(
+                'Blink Count',
+                color=NAVY_OUTLINE,
+                fontsize=10,
+                weight='bold'
+            )
+
+            self.ax.legend(
+                facecolor=WHITE,
+                edgecolor=NAVY_OUTLINE,
+                labelcolor=NAVY_OUTLINE
+            )
+
+        self.ax.tick_params(
+            colors=NAVY_OUTLINE
+        )
+
         for spine in self.ax.spines.values():
             spine.set_color(NAVY_OUTLINE)
             spine.set_linewidth(2)
@@ -490,7 +1068,7 @@ class EyeAwareApp(QMainWindow):
         metrics_layout = QHBoxLayout()
         self.card_ear = StatCard("Current EAR", "0.00", "Eye Aspect Ratio")
         self.card_blinks = StatCard("Total Blinks", "0", "Session Count")
-        self.card_bpm = StatCard("Current Min Blinks", "0", "Target: >= 10/min")
+        self.card_bpm = StatCard("Current Min Blinks", "0",  "Current 60-second window")
         self.card_time = StatCard("Duration", "00:00", "MM:SS Elapsed")
 
         metrics_layout.addWidget(self.card_ear)
@@ -585,9 +1163,9 @@ class EyeAwareApp(QMainWindow):
     # ==========================================
     # LOGIC & EVENT HANDLERS
     # ==========================================
-    def play_audio_alert(self, fallback_message: str, audio_path: str = CUSTOM_VOICE_AUDIO_PATH):
-        if audio_path and os.path.exists(audio_path):
-            self.media_player.setSource(QUrl.fromLocalFile(os.path.abspath(audio_path)))
+    def play_audio_alert(self, fallback_message: str):
+        if os.path.exists(CUSTOM_VOICE_AUDIO_PATH):
+            self.media_player.setSource(QUrl.fromLocalFile(os.path.abspath(CUSTOM_VOICE_AUDIO_PATH)))
             self.audio_output.setVolume(1.0)
             self.media_player.play()
         else:
@@ -639,14 +1217,24 @@ class EyeAwareApp(QMainWindow):
             )
             self.video_label.setPixmap(scaled_pixmap)
 
+    # 
     @Slot(float, int, int, int, int)
-    def update_metrics(self, ear, total_blinks, bpm, streak, duration_sec):
+    def update_metrics(
+        self,
+        ear,
+        total_blinks,
+        current_minute_blinks,
+        stage,
+        duration_sec
+        ):
         self.card_ear.set_value(f"{ear:.2f}")
         self.card_blinks.set_value(str(total_blinks))
-        self.card_bpm.set_value(str(bpm))
+        self.card_bpm.set_value(str(current_minute_blinks))
 
         mins, secs = divmod(duration_sec, 60)
-        self.card_time.set_value(f"{mins:02d}:{secs:02d}")
+        self.card_time.set_value(
+            f"{mins:02d}:{secs:02d}"
+        )
 
     def toggle_camera_view(self, checked):
         if self.tracking_worker:
@@ -657,19 +1245,19 @@ class EyeAwareApp(QMainWindow):
 
     @Slot(str, str)
     def handle_alert(self, title, message):
-        self.play_audio_alert(message, audio_path=CUSTOM_VOICE_AUDIO_PATH)
+        self.play_audio_alert(message)
         popup = IllustrationAlertDialog(title, message, image_path=ILLUSTRATION_IMAGE_PATH, parent=self)
         popup.exec()
 
     @Slot(str)
     def handle_inactivity_warning(self, message):
-        self.play_audio_alert("Inactivity warning. No face detected for 5 minutes.", audio_path=WARNING_VOICE_AUDIO_PATH)
+        self.play_audio_alert("Inactivity warning. No face detected for 5 minutes.")
         popup = IllustrationAlertDialog("သတိပေးချက်", message, image_path=ILLUSTRATION_IMAGE_PATH, parent=self)
         popup.exec()
 
     @Slot()
     def handle_auto_shutdown(self):
-        self.play_audio_alert("No face detected for 10 minutes. Automatically shutting down session.", audio_path=WARNING_VOICE_AUDIO_PATH)
+        self.play_audio_alert("No face detected for 10 minutes. Automatically shutting down session.")
         self.stop_session()
 
     def apply_theme(self):
