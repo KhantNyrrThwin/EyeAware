@@ -25,28 +25,26 @@ from matplotlib.figure import Figure
 # ==========================================
 # CUSTOM ASSETS & AUDIO CONFIGURATION
 # ==========================================
-CUSTOM_VOICE_AUDIO_PATH = "custom_voice.mp3"  
+CUSTOM_VOICE_AUDIO_PATH = "alert.ogg"  
+WARNING_AUDIO_PATH = "warning.ogg"
 ILLUSTRATION_IMAGE_PATH = "blink_illustration.gif"
 
 
 # ==========================================
 # COLOR PALETTE COMBOS
 # ==========================================
-# Set ACTIVE_COMBO to 1 or 2:
-# Combo 1: Pink (#E83EA8) & Blue (#4351FC) -> Vibrant / High Energy
-# Combo 2: Periwinkle (#837EF2) & Lavender (#B468C3) -> Soft / Calm Focus
 ACTIVE_COMBO = 1
 
 COMBOS = {
     1: {
-        "primary": "#4351FC",     # Royal Blue (Headers, Primary Buttons, Line Charts)
-        "accent": "#E83EA8",      # Vibrant Pink (Active Badges, Warnings, Secondary Highlights)
-        "bg_light": "#F2F4FF",    # Light Tint
+        "primary": "#4351FC",
+        "accent": "#E83EA8",
+        "bg_light": "#F2F4FF",
     },
     2: {
-        "primary": "#837EF2",     # Periwinkle (Headers, Primary Buttons, Line Charts)
-        "accent": "#B468C3",      # Lavender (Active Badges, Warnings, Secondary Highlights)
-        "bg_light": "#F7F4FF",    # Light Tint
+        "primary": "#837EF2",
+        "accent": "#B468C3",
+        "bg_light": "#F7F4FF",
     }
 }
 
@@ -72,10 +70,18 @@ CONSEC_FRAMES = 3
 LEFT_EYE_INDICES = [362, 385, 387, 263, 373, 380]
 RIGHT_EYE_INDICES = [33, 160, 158, 133, 153, 144]
 
-LOW_BLINK_THRESHOLD = 10      # Blinks per minute threshold
-CONSEC_LOW_MINS_TRIGGER = 3   # Trigger alert on 3 consecutive low minutes
-INACTIVITY_WARN_SEC = 300     # 5 Minutes (no face)
-INACTIVITY_SHUTDOWN_SEC = 600 # 10 Minutes (no face)
+LOW_BLINK_THRESHOLD = 10
+CONSEC_LOW_MINS_TRIGGER = 1
+INACTIVITY_WARN_SEC = 10
+INACTIVITY_SHUTDOWN_SEC = 600
+
+# ==========================================
+# DISTANCE & 20-20-20 CONSTANTS
+# ==========================================
+SCREEN_DISTANCE_THRESHOLD = 0.35  # Max width of eyes relative to frame width
+DISTANCE_COOLDOWN_SEC = 15        # Seconds to wait before warning again if still too close
+TWENTY_MINUTES_SEC = 1200         # 20 minutes for the 20-20-20 rule
+TWENTY_SECONDS_SEC = 20           # 20 seconds of looking away
 
 
 # ==========================================
@@ -118,6 +124,10 @@ class EyeTrackingWorker(QThread):
     alert_triggered = Signal(str, str)
     inactivity_warned = Signal(str)
     auto_shutdown_signal = Signal()
+    
+    # SIGNALS FOR 20-20-20
+    twenty_twenty_triggered = Signal()
+    twenty_twenty_updated = Signal(int)
 
     def __init__(self, camera_index=0, parent=None):
         super().__init__(parent)
@@ -128,6 +138,12 @@ class EyeTrackingWorker(QThread):
         self.minute_blink_history = []
         self.current_window_blinks = 0
         self.consecutive_low_minutes = 0
+        
+        # TRACKING VARIABLES
+        self.last_distance_warn = 0
+        self.last_20_trigger = 0
+        self.twenty_twenty_state = False
+        self.away_start_time = None
 
     def calculate_ear(self, eye_indices, landmarks):
         try:
@@ -173,8 +189,31 @@ class EyeTrackingWorker(QThread):
 
             current_ear = 0.0
             face_detected = results.multi_face_landmarks is not None
-
             now = time.time()
+            session_duration = int(now - session_start_time)
+
+            # --- 20-20-20 RULE LOGIC ---
+            if session_duration > 0 and session_duration % TWENTY_MINUTES_SEC == 0 and not self.twenty_twenty_state and session_duration != self.last_20_trigger:
+                self.twenty_twenty_state = True
+                self.last_20_trigger = session_duration
+                self.twenty_twenty_triggered.emit()
+
+            if self.twenty_twenty_state:
+                if not face_detected:
+                    if self.away_start_time is None:
+                        self.away_start_time = now
+                    away_duration = now - self.away_start_time
+                    seconds_left = max(0, TWENTY_SECONDS_SEC - int(away_duration))
+                    self.twenty_twenty_updated.emit(seconds_left)
+                    
+                    if seconds_left == 0:
+                        self.twenty_twenty_state = False
+                        self.away_start_time = None
+                else:
+                    self.away_start_time = None
+                    self.twenty_twenty_updated.emit(TWENTY_SECONDS_SEC)
+            # ---------------------------
+
             if not face_detected:
                 if face_lost_start_time is None:
                     face_lost_start_time = now
@@ -194,6 +233,18 @@ class EyeTrackingWorker(QThread):
                 left_ear = self.calculate_ear(LEFT_EYE_INDICES, landmarks)
                 right_ear = self.calculate_ear(RIGHT_EYE_INDICES, landmarks)
                 current_ear = (left_ear + right_ear) / 2.0
+
+                # --- DISTANCE LOGIC ---
+                dist_x = abs(landmarks[263].x - landmarks[33].x)
+                
+                if dist_x > SCREEN_DISTANCE_THRESHOLD:
+                    if (now - self.last_distance_warn) > DISTANCE_COOLDOWN_SEC:
+                        self.alert_triggered.emit("Too Close", "You are sitting too close to the screen. Please sit back!")
+                        self.last_distance_warn = now
+                else:
+                    # Reset the cooldown timer immediately when the user returns to a safe distance
+                    self.last_distance_warn = 0
+                # ----------------------
 
                 if current_ear < EAR_THRESHOLD:
                     frame_counter += 1
@@ -218,7 +269,6 @@ class EyeTrackingWorker(QThread):
                 self.current_window_blinks = 0
                 window_start_time = now
 
-            session_duration = int(now - session_start_time)
             self.metrics_updated.emit(current_ear, self.total_blinks, self.current_window_blinks, self.consecutive_low_minutes, session_duration)
 
             if self.show_camera:
@@ -276,9 +326,7 @@ class IllustrationAlertDialog(QDialog):
         title_label.setStyleSheet(f"color: {COLOR_ACCENT}; font-size: 20px; font-weight: 900; font-family: {FONT_HEADING};")
         layout.addWidget(title_label)
 
-        # NEW CODE
         ill_frame = QFrame()
-        # Changed background-color to transparent to remove the blue box
         ill_frame.setStyleSheet(f"background-color: transparent; border: 3px solid {NAVY_OUTLINE}; border-radius: 12px;")
         ill_layout = QVBoxLayout(ill_frame)
         ill_layout.setContentsMargins(15, 15, 15, 15)
@@ -287,18 +335,15 @@ class IllustrationAlertDialog(QDialog):
             ill_label = QLabel()
             ill_label.setAlignment(Qt.AlignCenter)
             
-            # Use QMovie to animate the .gif
             movie = QMovie(image_path)
             movie.setScaledSize(QSize(220, 160)) 
             ill_label.setMovie(movie)
-            movie.start() # Start the animation
+            movie.start() 
             
-            # Keep a reference to prevent garbage collection
             self.movie = movie 
         else:
             ill_label = QLabel("👁️ ✨ 😌 ✨ 👁️\n\nTake a Blink Break!")
             ill_label.setAlignment(Qt.AlignCenter)
-            # Make sure text is visible if the background is now transparent/white
             ill_label.setStyleSheet(f"color: {NAVY_OUTLINE}; font-size: 20px; font-weight: bold; font-family: {FONT_HEADING};")
 
         ill_layout.addWidget(ill_label)
@@ -325,6 +370,47 @@ class IllustrationAlertDialog(QDialog):
         ok_btn.clicked.connect(self.accept)
 
         layout.addWidget(ok_btn, alignment=Qt.AlignCenter)
+
+
+class TwentyTwentyDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("20-20-20 Rule")
+        self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
+        self.setModal(True)
+        self.resize(450, 250)
+
+        self.setStyleSheet(f"""
+            QDialog {{ background-color: {WHITE}; border: 4px solid {NAVY_OUTLINE}; border-radius: 16px; }}
+        """)
+        apply_brutalist_shadow(self)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        title_label = QLabel("20-20-20 EYE BREAK")
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setStyleSheet(f"color: {COLOR_ACCENT}; font-size: 22px; font-weight: 900; font-family: {FONT_HEADING};")
+        layout.addWidget(title_label)
+
+        msg_label = QLabel("You've been looking at the screen for 20 minutes.\nLook at something 20 feet away to dismiss this.")
+        msg_label.setAlignment(Qt.AlignCenter)
+        msg_label.setStyleSheet(f"color: {NAVY_OUTLINE}; font-size: 15px; font-weight: bold; font-family: {FONT_BODY};")
+        layout.addWidget(msg_label)
+
+        self.countdown_label = QLabel("Look away from the camera to start countdown...")
+        self.countdown_label.setAlignment(Qt.AlignCenter)
+        self.countdown_label.setStyleSheet(f"color: {COLOR_PRIMARY}; font-size: 24px; font-weight: 900; font-family: {FONT_HEADING}; margin-top: 15px;")
+        layout.addWidget(self.countdown_label, stretch=1)
+
+    @Slot(int)
+    def update_countdown(self, seconds_left):
+        if seconds_left <= 0:
+            self.accept()
+        elif seconds_left == TWENTY_SECONDS_SEC:
+            self.countdown_label.setText("Look away from the camera to start countdown...")
+        else:
+            self.countdown_label.setText(f"{seconds_left} SECONDS REMAINING")
 
 
 class StatCard(QFrame):
@@ -420,7 +506,6 @@ class EyeAwareApp(QMainWindow):
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
 
-        # Header Title Bar
         header = QFrame()
         header.setStyleSheet(f"background-color: {COLOR_PRIMARY}; border-bottom: 4px solid {NAVY_OUTLINE};")
         header_layout = QHBoxLayout(header)
@@ -441,7 +526,6 @@ class EyeAwareApp(QMainWindow):
         header_layout.addWidget(self.status_badge)
         self.main_layout.addWidget(header)
 
-        # Main Content Stack
         content_container = QWidget()
         self.content_layout = QVBoxLayout(content_container)
         self.content_layout.setContentsMargins(20, 20, 20, 20)
@@ -465,7 +549,7 @@ class EyeAwareApp(QMainWindow):
         welcome_label = QLabel("Welcome to EyeAware")
         welcome_label.setStyleSheet(f"color: {NAVY_OUTLINE}; font-size: 32px; font-weight: 900; font-family: {FONT_HEADING};")
 
-        sub_label = QLabel("Real-time blink tracking and ergonomic fatigue prevention.")
+        sub_label = QLabel("Real-time blink tracking, distance, and fatigue prevention.")
         sub_label.setStyleSheet(f"color: {NAVY_OUTLINE}; margin-bottom: 30px; font-size: 16px; font-family: {FONT_BODY}; font-weight: bold;")
 
         start_btn = QPushButton("Start Monitoring Session")
@@ -493,7 +577,6 @@ class EyeAwareApp(QMainWindow):
         dash_widget = QWidget()
         layout = QVBoxLayout(dash_widget)
 
-        # Stat Cards
         metrics_layout = QHBoxLayout()
         self.card_ear = StatCard("Current EAR", "0.00", "Eye Aspect Ratio")
         self.card_blinks = StatCard("Total Blinks", "0", "Session Count")
@@ -506,7 +589,6 @@ class EyeAwareApp(QMainWindow):
         metrics_layout.addWidget(self.card_time)
         layout.addLayout(metrics_layout)
 
-        # Camera Display Frame
         center_layout = QHBoxLayout()
         self.video_container = QFrame()
         self.video_container.setStyleSheet(f"background-color: {WHITE}; border-radius: 12px; border: 3px solid {NAVY_OUTLINE};")
@@ -522,7 +604,6 @@ class EyeAwareApp(QMainWindow):
         center_layout.addWidget(self.video_container)
         layout.addLayout(center_layout, stretch=1)
 
-        # Toolbar
         controls = QHBoxLayout()
         self.camera_toggle = QCheckBox("Show Camera Feed")
         self.camera_toggle.setChecked(True)
@@ -592,9 +673,12 @@ class EyeAwareApp(QMainWindow):
     # ==========================================
     # LOGIC & EVENT HANDLERS
     # ==========================================
-    def play_audio_alert(self, fallback_message: str):
-        if os.path.exists(CUSTOM_VOICE_AUDIO_PATH):
-            self.media_player.setSource(QUrl.fromLocalFile(os.path.abspath(CUSTOM_VOICE_AUDIO_PATH)))
+    def play_audio_alert(self, fallback_message: str, audio_path: str = None):
+        """ Plays the targeted audio file. If path isn't provided, uses default alert. """
+        target_audio = audio_path if audio_path else CUSTOM_VOICE_AUDIO_PATH
+        
+        if os.path.exists(target_audio):
+            self.media_player.setSource(QUrl.fromLocalFile(os.path.abspath(target_audio)))
             self.audio_output.setVolume(1.0)
             self.media_player.play()
         else:
@@ -615,6 +699,11 @@ class EyeAwareApp(QMainWindow):
         self.tracking_worker.alert_triggered.connect(self.handle_alert)
         self.tracking_worker.inactivity_warned.connect(self.handle_inactivity_warning)
         self.tracking_worker.auto_shutdown_signal.connect(self.handle_auto_shutdown)
+        
+        # SIGNAL CONNECTIONS FOR 20-20-20
+        self.tracking_worker.twenty_twenty_triggered.connect(self.handle_twenty_twenty)
+        self.twenty_dialog = None
+        
         self.tracking_worker.start()
 
     def stop_session(self):
@@ -670,7 +759,7 @@ class EyeAwareApp(QMainWindow):
 
     @Slot(str)
     def handle_inactivity_warning(self, message):
-        self.play_audio_alert("Inactivity warning. No face detected for 5 minutes.")
+        self.play_audio_alert("Inactivity warning. No face detected for 5 minutes.", audio_path=WARNING_AUDIO_PATH)
         popup = IllustrationAlertDialog("သတိပေးချက်", message, image_path=ILLUSTRATION_IMAGE_PATH, parent=self)
         popup.exec()
 
@@ -678,6 +767,15 @@ class EyeAwareApp(QMainWindow):
     def handle_auto_shutdown(self):
         self.play_audio_alert("No face detected for 10 minutes. Automatically shutting down session.")
         self.stop_session()
+
+    @Slot()
+    def handle_twenty_twenty(self):
+        self.play_audio_alert("Time for a 20 20 20 break! Look away from the screen.")
+        self.twenty_dialog = TwentyTwentyDialog(parent=self)
+        self.tracking_worker.twenty_twenty_updated.connect(self.twenty_dialog.update_countdown)
+        self.twenty_dialog.exec()
+        self.tracking_worker.twenty_twenty_updated.disconnect(self.twenty_dialog.update_countdown)
+        self.twenty_dialog = None
 
     def apply_theme(self):
         self.setStyleSheet(f"""
