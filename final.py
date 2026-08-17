@@ -9,12 +9,13 @@ import cv2
 import mediapipe as mp
 import pyttsx3
 
-from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer
-from PySide6.QtGui import QImage, QPixmap, QIcon, QFont, QColor
+from PySide6.QtCore import Qt, QThread, Signal, Slot, QUrl
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PySide6.QtGui import QImage, QPixmap, QFont, QColor
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFrame, QCheckBox, QStackedWidget,
-    QMessageBox, QGraphicsDropShadowEffect, QSizePolicy
+    QGraphicsDropShadowEffect, QSizePolicy, QDialog
 )
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -22,17 +23,45 @@ from matplotlib.figure import Figure
 
 
 # ==========================================
-# THEME CONSTANTS (Vibrant Cartoon Pop / Neubrutalism)
+# CUSTOM ASSETS & AUDIO CONFIGURATION
 # ==========================================
-BG_PRIMARY = "#E3F2FD"      # Cloud Blue
-BG_SECONDARY = "#FFD166"    # Sunny Yellow
-ACCENT_VIOLET = "#7209B7"   # Bright Violet
-NAVY_OUTLINE = "#1A1C23"    # Midnight Navy
-WHITE = "#FFFFFF"
+CUSTOM_VOICE_AUDIO_PATH = "custom_voice.mp3"  
+ILLUSTRATION_IMAGE_PATH = "blink_illustration.png"
+
+
+# ==========================================
+# COLOR PALETTE COMBOS
+# ==========================================
+# Set ACTIVE_COMBO to 1 or 2:
+# Combo 1: Pink (#E83EA8) & Blue (#4351FC) -> Vibrant / High Energy
+# Combo 2: Periwinkle (#837EF2) & Lavender (#B468C3) -> Soft / Calm Focus
+ACTIVE_COMBO = 1
+
+COMBOS = {
+    1: {
+        "primary": "#4351FC",     # Royal Blue (Headers, Primary Buttons, Line Charts)
+        "accent": "#E83EA8",      # Vibrant Pink (Active Badges, Warnings, Secondary Highlights)
+        "bg_light": "#F2F4FF",    # Light Tint
+    },
+    2: {
+        "primary": "#837EF2",     # Periwinkle (Headers, Primary Buttons, Line Charts)
+        "accent": "#B468C3",      # Lavender (Active Badges, Warnings, Secondary Highlights)
+        "bg_light": "#F7F4FF",    # Light Tint
+    }
+}
+
+SELECTED_THEME = COMBOS.get(ACTIVE_COMBO, COMBOS[1])
+
+COLOR_PRIMARY = SELECTED_THEME["primary"]
+COLOR_ACCENT  = SELECTED_THEME["accent"]
+BG_PRIMARY    = SELECTED_THEME["bg_light"]
+
+NAVY_OUTLINE = "#1A1C23"
+WHITE        = "#FFFFFF"
 
 # Fonts
 FONT_HEADING = "'Fredoka', 'Sniglet', sans-serif"
-FONT_BODY = "'Nunito', 'Quicksand', sans-serif"
+FONT_BODY    = "'Nunito', 'Quicksand', sans-serif"
 
 
 # ==========================================
@@ -53,7 +82,6 @@ INACTIVITY_SHUTDOWN_SEC = 600 # 10 Minutes (no face)
 # ASYNCHRONOUS TTS WORKER
 # ==========================================
 class TTSWorker(QThread):
-    """Non-blocking Text-to-Speech queue worker."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.queue = queue.Queue()
@@ -82,17 +110,16 @@ class TTSWorker(QThread):
 
 
 # ==========================================
-# EYE TRACKING & PROCESSING WORKER
+# EYE TRACKING WORKER
 # ==========================================
 class EyeTrackingWorker(QThread):
-    """Worker thread handling OpenCV video acquisition and MediaPipe calculations."""
     frame_processed = Signal(QImage)
     metrics_updated = Signal(float, int, int, int, int)
     alert_triggered = Signal(str, str)
     inactivity_warned = Signal(str)
     auto_shutdown_signal = Signal()
 
-    def __init__(self, camera_index=1, parent=None):
+    def __init__(self, camera_index=0, parent=None):
         super().__init__(parent)
         self.camera_index = camera_index
         self.running = False
@@ -154,7 +181,7 @@ class EyeTrackingWorker(QThread):
                 else:
                     absent_duration = now - face_lost_start_time
                     if absent_duration >= INACTIVITY_WARN_SEC and not warned_5min_inactivity:
-                        self.inactivity_warned.emit("No face detected for 5 minutes. Please check camera or exit.")
+                        self.inactivity_warned.emit("မျက်နှာလေးကို ၅ မိနစ်လောက် မတွေ့ရသေးဘူးနော်။ ကင်မရာရှေ့မှာ ရှိနေသေးလား စစ်ကြည့်ပေးပါ။ မသုံးတော့ဘူးဆိုရင် ခဏပိတ်ထားလို့ရတယ်နော်။ 😊")
                         warned_5min_inactivity = True
                     if absent_duration >= INACTIVITY_SHUTDOWN_SEC:
                         self.auto_shutdown_signal.emit()
@@ -183,10 +210,8 @@ class EyeTrackingWorker(QThread):
                 if self.current_window_blinks < LOW_BLINK_THRESHOLD:
                     self.consecutive_low_minutes += 1
                     if self.consecutive_low_minutes >= CONSEC_LOW_MINS_TRIGGER:
-                        self.alert_triggered.emit(
-                            "Low Blink Rate Warning",
-                            "Low blink rate detected for 3 consecutive minutes. Please take a moment to blink or rest your eyes."
-                        )
+                        self.alert_triggered.emit(  "👀 မျက်တောင်လေး ခတ်ဖို့ မမေ့နဲ့နော်!",
+                                                    "မျက်တောင်ခတ်ဖို့ အချိန်ရောက်ပြီနော်! ခဏလေး အနားယူလိုက်ရအောင်။ 😊")
                 else:
                     self.consecutive_low_minutes = 0
 
@@ -216,23 +241,88 @@ class EyeTrackingWorker(QThread):
 
 
 # ==========================================
-# CUSTOM UI COMPONENTS (NEUBRUTALISM STYLED)
+# CUSTOM STYLED UI COMPONENTS
 # ==========================================
 def apply_brutalist_shadow(widget):
-    """Applies a hard, unblurred drop shadow characteristic of Pop-Brutalism."""
     shadow = QGraphicsDropShadowEffect()
-    shadow.setBlurRadius(0)  # Hard edge
-    shadow.setOffset(5, 5)   # Thick drop shadow
+    shadow.setBlurRadius(0)
+    shadow.setOffset(4, 4)
     shadow.setColor(QColor(NAVY_OUTLINE))
     widget.setGraphicsEffect(shadow)
 
+
+class IllustrationAlertDialog(QDialog):
+    def __init__(self, title, message, image_path=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
+        self.setModal(True)
+        self.resize(400, 340)
+
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {WHITE};
+                border: 4px solid {NAVY_OUTLINE};
+                border-radius: 16px;
+            }}
+        """)
+        apply_brutalist_shadow(self)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        title_label = QLabel(title.upper())
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setStyleSheet(f"color: {COLOR_ACCENT}; font-size: 20px; font-weight: 900; font-family: {FONT_HEADING};")
+        layout.addWidget(title_label)
+
+        ill_frame = QFrame()
+        ill_frame.setStyleSheet(f"background-color: {COLOR_PRIMARY}; border: 3px solid {NAVY_OUTLINE}; border-radius: 12px;")
+        ill_layout = QVBoxLayout(ill_frame)
+        ill_layout.setContentsMargins(15, 15, 15, 15)
+
+        if image_path and os.path.exists(image_path):
+            pixmap = QPixmap(image_path).scaled(220, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            ill_label = QLabel()
+            ill_label.setPixmap(pixmap)
+            ill_label.setAlignment(Qt.AlignCenter)
+        else:
+            ill_label = QLabel("👁️ ✨ 😌 ✨ 👁️\n\nTake a Blink Break!")
+            ill_label.setAlignment(Qt.AlignCenter)
+            ill_label.setStyleSheet(f"color: {WHITE}; font-size: 20px; font-weight: bold; font-family: {FONT_HEADING};")
+
+        ill_layout.addWidget(ill_label)
+        layout.addWidget(ill_frame, stretch=1)
+
+        msg_label = QLabel(message)
+        msg_label.setAlignment(Qt.AlignCenter)
+        msg_label.setWordWrap(True)
+        msg_label.setStyleSheet(f"color: {NAVY_OUTLINE}; font-size: 15px; font-weight: bold; font-family: {FONT_BODY}; margin-top: 8px;")
+        layout.addWidget(msg_label)
+
+        ok_btn = QPushButton("Got it!")
+        ok_btn.setFixedSize(130, 42)
+        ok_btn.setCursor(Qt.PointingHandCursor)
+        ok_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR_ACCENT}; color: {WHITE}; font-weight: 900;
+                font-size: 15px; border-radius: 10px; border: 3px solid {NAVY_OUTLINE};
+                font-family: {FONT_HEADING}; margin-top: 8px;
+            }}
+            QPushButton:hover {{ opacity: 0.9; }}
+        """)
+        apply_brutalist_shadow(ok_btn)
+        ok_btn.clicked.connect(self.accept)
+
+        layout.addWidget(ok_btn, alignment=Qt.AlignCenter)
+
+
 class StatCard(QFrame):
-    """Custom Card Component for Dashboard Metrics."""
     def __init__(self, title, value="0", unit="", parent=None):
         super().__init__(parent)
         self.setStyleSheet(f"""
             StatCard {{
-                background-color: {BG_SECONDARY};
+                background-color: {WHITE};
                 border-radius: 12px;
                 border: 3px solid {NAVY_OUTLINE};
                 padding: 10px;
@@ -247,13 +337,13 @@ class StatCard(QFrame):
         layout = QVBoxLayout(self)
         
         self.title_label = QLabel(title.upper())
-        self.title_label.setStyleSheet(f"color: {NAVY_OUTLINE}; font-size: 13px; font-weight: 900; font-family: {FONT_HEADING};")
+        self.title_label.setStyleSheet(f"color: {COLOR_PRIMARY}; font-size: 12px; font-weight: 900; font-family: {FONT_HEADING};")
         
         self.value_label = QLabel(value)
-        self.value_label.setStyleSheet(f"color: {ACCENT_VIOLET}; font-size: 32px; font-weight: 900; font-family: {FONT_HEADING};")
+        self.value_label.setStyleSheet(f"color: {NAVY_OUTLINE}; font-size: 30px; font-weight: 900; font-family: {FONT_HEADING};")
         
         self.unit_label = QLabel(unit)
-        self.unit_label.setStyleSheet(f"color: {NAVY_OUTLINE}; font-size: 12px; font-family: {FONT_BODY}; font-weight: bold;")
+        self.unit_label.setStyleSheet(f"color: {COLOR_ACCENT}; font-size: 12px; font-family: {FONT_BODY}; font-weight: bold;")
 
         layout.addWidget(self.title_label)
         layout.addWidget(self.value_label)
@@ -264,7 +354,6 @@ class StatCard(QFrame):
 
 
 class AnalyticsCanvas(FigureCanvas):
-    """Embedded Matplotlib canvas for session data plotting."""
     def __init__(self, parent=None):
         fig = Figure(figsize=(6, 4), dpi=100, facecolor=BG_PRIMARY)
         self.ax = fig.add_subplot(111)
@@ -280,8 +369,8 @@ class AnalyticsCanvas(FigureCanvas):
                          transform=self.ax.transAxes, weight='bold')
         else:
             minutes = list(range(1, len(history) + 1))
-            self.ax.plot(minutes, history, color=ACCENT_VIOLET, marker='o', linewidth=3, markersize=8, label='Blinks/Min')
-            self.ax.axhline(y=LOW_BLINK_THRESHOLD, color=NAVY_OUTLINE, linestyle='--', linewidth=2, label='Low Threshold (10)')
+            self.ax.plot(minutes, history, color=COLOR_PRIMARY, marker='o', linewidth=3, markersize=8, label='Blinks/Min')
+            self.ax.axhline(y=LOW_BLINK_THRESHOLD, color=COLOR_ACCENT, linestyle='--', linewidth=2, label='Low Threshold (10)')
             self.ax.set_xlabel('Minute Window', color=NAVY_OUTLINE, fontsize=10, weight='bold')
             self.ax.set_ylabel('Blink Count', color=NAVY_OUTLINE, fontsize=10, weight='bold')
             self.ax.legend(facecolor=WHITE, edgecolor=NAVY_OUTLINE, labelcolor=NAVY_OUTLINE)
@@ -300,12 +389,16 @@ class AnalyticsCanvas(FigureCanvas):
 class EyeAwareApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("EyeAware - Desktop Eye Health & Fatigue Monitor")
+        self.setWindowTitle("EyeAware - Eye Health & Fatigue Monitor")
         self.resize(1000, 750)
 
         self.tracking_worker = None
         self.tts_worker = TTSWorker()
         self.tts_worker.start()
+
+        self.media_player = QMediaPlayer(self)
+        self.audio_output = QAudioOutput(self)
+        self.media_player.setAudioOutput(self.audio_output)
 
         self.init_ui()
         self.apply_theme()
@@ -319,12 +412,12 @@ class EyeAwareApp(QMainWindow):
 
         # Header Title Bar
         header = QFrame()
-        header.setStyleSheet(f"background-color: {BG_SECONDARY}; border-bottom: 4px solid {NAVY_OUTLINE};")
+        header.setStyleSheet(f"background-color: {COLOR_PRIMARY}; border-bottom: 4px solid {NAVY_OUTLINE};")
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(20, 15, 20, 15)
         
         title = QLabel("EYEAWARE MONITOR")
-        title.setStyleSheet(f"color: {NAVY_OUTLINE}; letter-spacing: 1px; font-family: {FONT_HEADING}; font-size: 20px; font-weight: 900;")
+        title.setStyleSheet(f"color: {WHITE}; letter-spacing: 1px; font-family: {FONT_HEADING}; font-size: 20px; font-weight: 900;")
         
         self.status_badge = QLabel("IDLE")
         self.status_badge.setStyleSheet(f"""
@@ -338,7 +431,7 @@ class EyeAwareApp(QMainWindow):
         header_layout.addWidget(self.status_badge)
         self.main_layout.addWidget(header)
 
-        # Content container with padding
+        # Main Content Stack
         content_container = QWidget()
         self.content_layout = QVBoxLayout(content_container)
         self.content_layout.setContentsMargins(20, 20, 20, 20)
@@ -357,7 +450,7 @@ class EyeAwareApp(QMainWindow):
         layout.setAlignment(Qt.AlignCenter)
 
         icon_label = QLabel("👁️")
-        icon_label.setFont(QFont("Segoe UI Emoji", 72))
+        icon_label.setFont(QFont("Segoe UI Emoji", 68))
         
         welcome_label = QLabel("Welcome to EyeAware")
         welcome_label.setStyleSheet(f"color: {NAVY_OUTLINE}; font-size: 32px; font-weight: 900; font-family: {FONT_HEADING};")
@@ -366,15 +459,15 @@ class EyeAwareApp(QMainWindow):
         sub_label.setStyleSheet(f"color: {NAVY_OUTLINE}; margin-bottom: 30px; font-size: 16px; font-family: {FONT_BODY}; font-weight: bold;")
 
         start_btn = QPushButton("Start Monitoring Session")
-        start_btn.setFixedSize(300, 60)
+        start_btn.setFixedSize(280, 56)
         start_btn.setCursor(Qt.PointingHandCursor)
         start_btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: {ACCENT_VIOLET}; color: {WHITE}; font-weight: 900;
-                font-size: 18px; border-radius: 12px; border: 3px solid {NAVY_OUTLINE};
+                background-color: {COLOR_PRIMARY}; color: {WHITE}; font-weight: 900;
+                font-size: 17px; border-radius: 12px; border: 3px solid {NAVY_OUTLINE};
                 font-family: {FONT_HEADING};
             }}
-            QPushButton:hover {{ background-color: #8C1DE0; }}
+            QPushButton:hover {{ opacity: 0.95; }}
         """)
         apply_brutalist_shadow(start_btn)
         start_btn.clicked.connect(self.start_session)
@@ -390,7 +483,7 @@ class EyeAwareApp(QMainWindow):
         dash_widget = QWidget()
         layout = QVBoxLayout(dash_widget)
 
-        # Metrics Row
+        # Stat Cards
         metrics_layout = QHBoxLayout()
         self.card_ear = StatCard("Current EAR", "0.00", "Eye Aspect Ratio")
         self.card_blinks = StatCard("Total Blinks", "0", "Session Count")
@@ -403,38 +496,23 @@ class EyeAwareApp(QMainWindow):
         metrics_layout.addWidget(self.card_time)
         layout.addLayout(metrics_layout)
 
-        # Center view: Camera & Illustration Placeholder
+        # Camera Display Frame
         center_layout = QHBoxLayout()
-
-        # Video Frame Container
         self.video_container = QFrame()
         self.video_container.setStyleSheet(f"background-color: {WHITE}; border-radius: 12px; border: 3px solid {NAVY_OUTLINE};")
         apply_brutalist_shadow(self.video_container)
         video_layout = QVBoxLayout(self.video_container)
 
-        self.video_label = QLabel("Camera Feed Hidden / Inactive")
+        self.video_label = QLabel("Camera Feed Active")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet(f"color: {NAVY_OUTLINE}; font-size: 14px; font-weight: bold;")
         self.video_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         video_layout.addWidget(self.video_label)
-        
-        # Illustration Container
-        self.illustration_container = QFrame()
-        self.illustration_container.setStyleSheet(f"background-color: {WHITE}; border-radius: 12px; border: 3px solid {NAVY_OUTLINE};")
-        apply_brutalist_shadow(self.illustration_container)
-        ill_layout = QVBoxLayout(self.illustration_container)
-        
-        # Place your blinking illustrations or icons here
-        ill_label = QLabel("👁️ ➡️ 😌 ➡️ 👁️\n\n(Illustration Area)")
-        ill_label.setAlignment(Qt.AlignCenter)
-        ill_label.setStyleSheet(f"color: {NAVY_OUTLINE}; font-size: 20px; font-weight: bold; font-family: {FONT_HEADING};")
-        ill_layout.addWidget(ill_label)
 
-        center_layout.addWidget(self.video_container, stretch=2)
-        center_layout.addWidget(self.illustration_container, stretch=1)
+        center_layout.addWidget(self.video_container)
         layout.addLayout(center_layout, stretch=1)
 
-        # Control Toolbar
+        # Toolbar
         controls = QHBoxLayout()
         self.camera_toggle = QCheckBox("Show Camera Feed")
         self.camera_toggle.setChecked(True)
@@ -442,15 +520,15 @@ class EyeAwareApp(QMainWindow):
         self.camera_toggle.toggled.connect(self.toggle_camera_view)
 
         stop_btn = QPushButton("Stop Session")
-        stop_btn.setFixedSize(160, 50)
+        stop_btn.setFixedSize(160, 48)
         stop_btn.setCursor(Qt.PointingHandCursor)
         stop_btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: #FF5A5F; color: {WHITE}; font-weight: 900;
+                background-color: {COLOR_ACCENT}; color: {WHITE}; font-weight: 900;
                 font-size: 16px; border-radius: 12px; border: 3px solid {NAVY_OUTLINE};
                 font-family: {FONT_HEADING};
             }}
-            QPushButton:hover {{ background-color: #FF7B7F; }}
+            QPushButton:hover {{ opacity: 0.95; }}
         """)
         apply_brutalist_shadow(stop_btn)
         stop_btn.clicked.connect(self.stop_session)
@@ -470,33 +548,30 @@ class EyeAwareApp(QMainWindow):
         title.setStyleSheet(f"color: {NAVY_OUTLINE}; font-size: 24px; font-weight: 900; font-family: {FONT_HEADING};")
         layout.addWidget(title)
 
-        # Summary Metrics
         self.summary_label = QLabel("Total Blinks: 0 | Average BPM: 0.0")
         self.summary_label.setStyleSheet(f"color: {NAVY_OUTLINE}; font-size: 16px; font-weight: bold; margin-bottom: 10px; font-family: {FONT_BODY};")
         layout.addWidget(self.summary_label)
 
-        # Matplotlib Chart Canvas inside a pop-brutalist frame
         chart_frame = QFrame()
-        chart_frame.setStyleSheet(f"background-color: {BG_PRIMARY}; border: 3px solid {NAVY_OUTLINE}; border-radius: 12px;")
+        chart_frame.setStyleSheet(f"background-color: {WHITE}; border: 3px solid {NAVY_OUTLINE}; border-radius: 12px;")
         apply_brutalist_shadow(chart_frame)
         chart_layout = QVBoxLayout(chart_frame)
-        chart_layout.setContentsMargins(0,0,0,0)
+        chart_layout.setContentsMargins(0, 0, 0, 0)
         
         self.chart_canvas = AnalyticsCanvas(self)
         chart_layout.addWidget(self.chart_canvas)
         layout.addWidget(chart_frame, stretch=1)
 
-        # Return Home Button
         home_btn = QPushButton("Return to Home")
-        home_btn.setFixedSize(200, 50)
+        home_btn.setFixedSize(180, 48)
         home_btn.setCursor(Qt.PointingHandCursor)
         home_btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: {ACCENT_VIOLET}; color: {WHITE}; font-weight: 900;
+                background-color: {COLOR_PRIMARY}; color: {WHITE}; font-weight: 900;
                 font-size: 16px; border-radius: 12px; border: 3px solid {NAVY_OUTLINE};
                 font-family: {FONT_HEADING}; margin-top: 15px;
             }}
-            QPushButton:hover {{ background-color: #8C1DE0; }}
+            QPushButton:hover {{ opacity: 0.95; }}
         """)
         apply_brutalist_shadow(home_btn)
         home_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(0))
@@ -505,18 +580,25 @@ class EyeAwareApp(QMainWindow):
         self.stacked_widget.addWidget(analytics_widget)
 
     # ==========================================
-    # BUSINESS LOGIC & THREAD HANDLERS
+    # LOGIC & EVENT HANDLERS
     # ==========================================
+    def play_audio_alert(self, fallback_message: str):
+        if os.path.exists(CUSTOM_VOICE_AUDIO_PATH):
+            self.media_player.setSource(QUrl.fromLocalFile(os.path.abspath(CUSTOM_VOICE_AUDIO_PATH)))
+            self.audio_output.setVolume(1.0)
+            self.media_player.play()
+        else:
+            self.tts_worker.speak(fallback_message)
+
     def start_session(self):
         self.stacked_widget.setCurrentIndex(1)
         self.status_badge.setText("ACTIVE")
         self.status_badge.setStyleSheet(f"""
-            background-color: {ACCENT_VIOLET}; color: {WHITE}; 
+            background-color: {COLOR_ACCENT}; color: {WHITE}; 
             padding: 6px 14px; border-radius: 12px; font-weight: 900;
             border: 2px solid {NAVY_OUTLINE}; font-family: {FONT_HEADING};
         """)
 
-        # Initialize background tracking thread
         self.tracking_worker = EyeTrackingWorker(camera_index=0)
         self.tracking_worker.frame_processed.connect(self.update_video_frame)
         self.tracking_worker.metrics_updated.connect(self.update_metrics)
@@ -531,7 +613,6 @@ class EyeAwareApp(QMainWindow):
             total_blinks = self.tracking_worker.total_blinks
             self.tracking_worker.stop()
 
-            # Render Analytics
             avg_bpm = np.mean(history) if history else 0.0
             self.summary_label.setText(
                 f"Total Blinks: {total_blinks} | Monitored Minutes: {len(history)} | Average Rate: {avg_bpm:.1f} BPM"
@@ -544,7 +625,7 @@ class EyeAwareApp(QMainWindow):
             padding: 6px 14px; border-radius: 12px; font-weight: 900;
             border: 2px solid {NAVY_OUTLINE}; font-family: {FONT_HEADING};
         """)
-        self.stacked_widget.setCurrentIndex(2) # Show Analytics View
+        self.stacked_widget.setCurrentIndex(2)
 
     @Slot(QImage)
     def update_video_frame(self, qt_img):
@@ -573,42 +654,28 @@ class EyeAwareApp(QMainWindow):
 
     @Slot(str, str)
     def handle_alert(self, title, message):
-        self.tts_worker.speak(message)
-        
-        msg = QMessageBox(self)
-        msg.setWindowTitle(title)
-        msg.setText(message)
-        msg.setStyleSheet(f"background-color: {WHITE}; color: {NAVY_OUTLINE}; font-weight: bold; font-family: {FONT_BODY};")
-        msg.exec()
+        self.play_audio_alert(message)
+        popup = IllustrationAlertDialog(title, message, image_path=ILLUSTRATION_IMAGE_PATH, parent=self)
+        popup.exec()
 
     @Slot(str)
     def handle_inactivity_warning(self, message):
-        self.tts_worker.speak("Inactivity warning. No face detected for 5 minutes.")
-        
-        msg = QMessageBox(self)
-        msg.setWindowTitle("Inactivity Warning")
-        msg.setText(message)
-        msg.setStyleSheet(f"background-color: {WHITE}; color: {NAVY_OUTLINE}; font-weight: bold; font-family: {FONT_BODY};")
-        msg.exec()
+        self.play_audio_alert("Inactivity warning. No face detected for 5 minutes.")
+        popup = IllustrationAlertDialog("Inactivity Warning", message, image_path=ILLUSTRATION_IMAGE_PATH, parent=self)
+        popup.exec()
 
     @Slot()
     def handle_auto_shutdown(self):
-        self.tts_worker.speak("No face detected for 10 minutes. Automatically shutting down session.")
+        self.play_audio_alert("No face detected for 10 minutes. Automatically shutting down session.")
         self.stop_session()
 
     def apply_theme(self):
         self.setStyleSheet(f"""
             QMainWindow {{ background-color: {BG_PRIMARY}; }}
             QWidget {{ font-family: {FONT_BODY}; }}
-            QMessageBox {{ border: 3px solid {NAVY_OUTLINE}; }}
-            QMessageBox QPushButton {{
-                background-color: {ACCENT_VIOLET}; color: {WHITE}; font-weight: 900;
-                padding: 6px 16px; border-radius: 8px; border: 2px solid {NAVY_OUTLINE};
-            }}
         """)
 
     def closeEvent(self, event):
-        """Ensure clean resource termination upon window exit."""
         if self.tracking_worker and self.tracking_worker.isRunning():
             self.tracking_worker.stop()
         if self.tts_worker and self.tts_worker.isRunning():
@@ -617,7 +684,7 @@ class EyeAwareApp(QMainWindow):
 
 
 # ==========================================
-# APPLICATION ENTRY POINT
+# ENTRY POINT
 # ==========================================
 if __name__ == "__main__":
     app = QApplication(sys.argv)
