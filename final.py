@@ -25,27 +25,25 @@ from matplotlib.figure import Figure
 # ==========================================
 # CUSTOM ASSETS & AUDIO CONFIGURATION
 # ==========================================
-CUSTOM_VOICE_AUDIO_PATH = "custom_voice.mp3"  
+CUSTOM_VOICE_AUDIO_PATH = "alert.ogg"  
+WARNING_VOICE_AUDIO_PATH = "warning.ogg"
 ILLUSTRATION_IMAGE_PATH = "blink_illustration.gif"
 
 
 # ==========================================
 # COLOR PALETTE COMBOS
 # ==========================================
-# Set ACTIVE_COMBO to 1 or 2:
-# Combo 1: Pink (#E83EA8) & Blue (#4351FC) -> Vibrant / High Energy
-# Combo 2: Periwinkle (#837EF2) & Lavender (#B468C3) -> Soft / Calm Focus
 ACTIVE_COMBO = 1
 
 COMBOS = {
     1: {
-        "primary": "#4351FC",     # Royal Blue (Headers, Primary Buttons, Line Charts)
-        "accent": "#E83EA8",      # Vibrant Pink (Active Badges, Warnings, Secondary Highlights)
+        "primary": "#4351FC",     # Royal Blue
+        "accent": "#E83EA8",      # Vibrant Pink
         "bg_light": "#F2F4FF",    # Light Tint
     },
     2: {
-        "primary": "#837EF2",     # Periwinkle (Headers, Primary Buttons, Line Charts)
-        "accent": "#B468C3",      # Lavender (Active Badges, Warnings, Secondary Highlights)
+        "primary": "#837EF2",     # Periwinkle
+        "accent": "#B468C3",      # Lavender
         "bg_light": "#F7F4FF",    # Light Tint
     }
 }
@@ -73,8 +71,8 @@ LEFT_EYE_INDICES = [362, 385, 387, 263, 373, 380]
 RIGHT_EYE_INDICES = [33, 160, 158, 133, 153, 144]
 
 LOW_BLINK_THRESHOLD = 10      # Blinks per minute threshold
-CONSEC_LOW_MINS_TRIGGER = 3   # Trigger alert on 3 consecutive low minutes
-INACTIVITY_WARN_SEC = 300     # 5 Minutes (no face)
+CONSEC_LOW_MINS_TRIGGER = 1   # Trigger alert on 3 consecutive low minutes
+INACTIVITY_WARN_SEC = 10     # 5 Minutes (no face)
 INACTIVITY_SHUTDOWN_SEC = 600 # 10 Minutes (no face)
 
 
@@ -276,9 +274,7 @@ class IllustrationAlertDialog(QDialog):
         title_label.setStyleSheet(f"color: {COLOR_ACCENT}; font-size: 20px; font-weight: 900; font-family: {FONT_HEADING};")
         layout.addWidget(title_label)
 
-        # NEW CODE
         ill_frame = QFrame()
-        # Changed background-color to transparent to remove the blue box
         ill_frame.setStyleSheet(f"background-color: transparent; border: 3px solid {NAVY_OUTLINE}; border-radius: 12px;")
         ill_layout = QVBoxLayout(ill_frame)
         ill_layout.setContentsMargins(15, 15, 15, 15)
@@ -287,18 +283,15 @@ class IllustrationAlertDialog(QDialog):
             ill_label = QLabel()
             ill_label.setAlignment(Qt.AlignCenter)
             
-            # Use QMovie to animate the .gif
             movie = QMovie(image_path)
             movie.setScaledSize(QSize(220, 160)) 
             ill_label.setMovie(movie)
-            movie.start() # Start the animation
+            movie.start()
             
-            # Keep a reference to prevent garbage collection
             self.movie = movie 
         else:
             ill_label = QLabel("👁️ ✨ 😌 ✨ 👁️\n\nTake a Blink Break!")
             ill_label.setAlignment(Qt.AlignCenter)
-            # Make sure text is visible if the background is now transparent/white
             ill_label.setStyleSheet(f"color: {NAVY_OUTLINE}; font-size: 20px; font-weight: bold; font-family: {FONT_HEADING};")
 
         ill_layout.addWidget(ill_label)
@@ -592,9 +585,9 @@ class EyeAwareApp(QMainWindow):
     # ==========================================
     # LOGIC & EVENT HANDLERS
     # ==========================================
-    def play_audio_alert(self, fallback_message: str):
-        if os.path.exists(CUSTOM_VOICE_AUDIO_PATH):
-            self.media_player.setSource(QUrl.fromLocalFile(os.path.abspath(CUSTOM_VOICE_AUDIO_PATH)))
+    def play_audio_alert(self, fallback_message: str, audio_path: str = CUSTOM_VOICE_AUDIO_PATH):
+        if audio_path and os.path.exists(audio_path):
+            self.media_player.setSource(QUrl.fromLocalFile(os.path.abspath(audio_path)))
             self.audio_output.setVolume(1.0)
             self.media_player.play()
         else:
@@ -664,19 +657,19 @@ class EyeAwareApp(QMainWindow):
 
     @Slot(str, str)
     def handle_alert(self, title, message):
-        self.play_audio_alert(message)
+        self.play_audio_alert(message, audio_path=CUSTOM_VOICE_AUDIO_PATH)
         popup = IllustrationAlertDialog(title, message, image_path=ILLUSTRATION_IMAGE_PATH, parent=self)
         popup.exec()
 
     @Slot(str)
     def handle_inactivity_warning(self, message):
-        self.play_audio_alert("Inactivity warning. No face detected for 5 minutes.")
+        self.play_audio_alert("Inactivity warning. No face detected for 5 minutes.", audio_path=WARNING_VOICE_AUDIO_PATH)
         popup = IllustrationAlertDialog("သတိပေးချက်", message, image_path=ILLUSTRATION_IMAGE_PATH, parent=self)
         popup.exec()
 
     @Slot()
     def handle_auto_shutdown(self):
-        self.play_audio_alert("No face detected for 10 minutes. Automatically shutting down session.")
+        self.play_audio_alert("No face detected for 10 minutes. Automatically shutting down session.", audio_path=WARNING_VOICE_AUDIO_PATH)
         self.stop_session()
 
     def apply_theme(self):
