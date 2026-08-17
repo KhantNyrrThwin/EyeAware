@@ -661,7 +661,7 @@ class EyeAwareApp(QMainWindow):
     @Slot(str)
     def handle_inactivity_warning(self, message):
         self.play_audio_alert("Inactivity warning. No face detected for 5 minutes.")
-        popup = IllustrationAlertDialog("Inactivity Warning", message, image_path=ILLUSTRATION_IMAGE_PATH, parent=self)
+        popup = IllustrationAlertDialog("သတိပေးချက်", message, image_path=ILLUSTRATION_IMAGE_PATH, parent=self)
         popup.exec()
 
     @Slot()
