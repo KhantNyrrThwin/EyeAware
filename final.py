@@ -9,9 +9,9 @@ import cv2
 import mediapipe as mp
 import pyttsx3
 
-from PySide6.QtCore import Qt, QThread, Signal, Slot, QUrl
+from PySide6.QtCore import Qt, QThread, Signal, Slot, QUrl, QSize
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PySide6.QtGui import QImage, QPixmap, QFont, QColor
+from PySide6.QtGui import QImage, QPixmap, QFont, QColor, QMovie
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFrame, QCheckBox, QStackedWidget,
@@ -26,7 +26,7 @@ from matplotlib.figure import Figure
 # CUSTOM ASSETS & AUDIO CONFIGURATION
 # ==========================================
 CUSTOM_VOICE_AUDIO_PATH = "custom_voice.mp3"  
-ILLUSTRATION_IMAGE_PATH = "blink_illustration.png"
+ILLUSTRATION_IMAGE_PATH = "blink_illustration.gif"
 
 
 # ==========================================
@@ -276,20 +276,30 @@ class IllustrationAlertDialog(QDialog):
         title_label.setStyleSheet(f"color: {COLOR_ACCENT}; font-size: 20px; font-weight: 900; font-family: {FONT_HEADING};")
         layout.addWidget(title_label)
 
+        # NEW CODE
         ill_frame = QFrame()
-        ill_frame.setStyleSheet(f"background-color: {COLOR_PRIMARY}; border: 3px solid {NAVY_OUTLINE}; border-radius: 12px;")
+        # Changed background-color to transparent to remove the blue box
+        ill_frame.setStyleSheet(f"background-color: transparent; border: 3px solid {NAVY_OUTLINE}; border-radius: 12px;")
         ill_layout = QVBoxLayout(ill_frame)
         ill_layout.setContentsMargins(15, 15, 15, 15)
 
         if image_path and os.path.exists(image_path):
-            pixmap = QPixmap(image_path).scaled(220, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             ill_label = QLabel()
-            ill_label.setPixmap(pixmap)
             ill_label.setAlignment(Qt.AlignCenter)
+            
+            # Use QMovie to animate the .gif
+            movie = QMovie(image_path)
+            movie.setScaledSize(QSize(220, 160)) 
+            ill_label.setMovie(movie)
+            movie.start() # Start the animation
+            
+            # Keep a reference to prevent garbage collection
+            self.movie = movie 
         else:
             ill_label = QLabel("👁️ ✨ 😌 ✨ 👁️\n\nTake a Blink Break!")
             ill_label.setAlignment(Qt.AlignCenter)
-            ill_label.setStyleSheet(f"color: {WHITE}; font-size: 20px; font-weight: bold; font-family: {FONT_HEADING};")
+            # Make sure text is visible if the background is now transparent/white
+            ill_label.setStyleSheet(f"color: {NAVY_OUTLINE}; font-size: 20px; font-weight: bold; font-family: {FONT_HEADING};")
 
         ill_layout.addWidget(ill_label)
         layout.addWidget(ill_frame, stretch=1)
